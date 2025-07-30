@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>AM解调.md</title>
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<p>你这轮的问题可以分成 6 块：<strong>（A）RSSI / Vpp / SNR 的区别与判别逻辑</strong>、<strong>（B）“FM 下扫台能扫到 AM/CW”的原因</strong>、<strong>（C）AM 解调的几条实现路线（从最简到更稳）</strong>、<strong>（D）是否需要额外 LNA、信号如何走线</strong>、<strong>（E）有没有“一颗芯片式”的 AM 解调模块</strong>、<strong>（F）AGC 到 1 V ±0.1 V 的可行性</strong>。我把每块讲清，并给出<strong>可落地的连接图</strong>。</p>
+<hr>
+<h2 id="a-rssi--vpp--snr-%E5%88%86%E5%88%AB%E6%98%AF%E4%BB%80%E4%B9%88%E6%80%8E%E4%B9%88%E7%94%A8%E6%9D%A5%E5%88%A4-fm--am--cw">A. RSSI / Vpp / SNR 分别是什么？怎么用来判 FM / AM / CW？</h2>
+<ul>
+<li><strong>RSSI</strong>：<em>射频</em>强度指示（功率），看的是<strong>载波强不强</strong>，跟是不是有调制、调什么制式<strong>无关</strong>。所以 AM/FM/CW 只要同频、场强大，RSSI 都会高。(<a href="https://en.wikipedia.org/wiki/Received_signal_strength_indicator?utm_source=chatgpt.com" title="Received signal strength indicator">维基百科</a>)</li>
+<li><strong>Vpp（包络/音频幅度）</strong>：这是<strong>解调后</strong>在音频端看到的峰峰值。不同解调器得到的 Vpp 代表的是<strong>调制</strong>信息（AM 的包络、FM 的基带）。</li>
+<li><strong>SNR</strong>：音频信噪比。Si47xx 在 FM 模式能直接回报 SNR / VALID 等状态字节，用来判断“这个频点 FM 解调是不是像样”。(<a href="https://www.skyworksinc.com/-/media/Skyworks/SL/documents/public/application-notes/AN332.pdf?utm_source=chatgpt.com" title="AN332: Si47xx Programming Guide - skyworksinc.com">skyworksinc.com</a>)</li>
+</ul>
+<blockquote>
+<p>关键点：<strong>RSSI≠Vpp</strong>。RSSI 在“射频端”，Vpp 在“音频端”。</p>
+</blockquote>
+<p><strong>一键判别的实用流程（建议阈值，赛前用 tinySA 标定一遍）：</strong></p>
+<ol>
+<li>
+<p><strong>FM 方式扫台</strong>（100 kHz 步进），拿到若干 RSSI 高的候选频点。</p>
+</li>
+<li>
+<p>对每个候选频点：</p>
+<ul>
+<li>
+<p>2.1 <strong>在 FM 模式</strong>读取 SNR 与音频 Vpp：</p>
+<ul>
+<li>SNR ≥ 25 dB 且 Vpp 高 ⇒ <strong>FM</strong>（成立就直接输出 FM 音频）。</li>
+</ul>
+</li>
+<li>
+<p>2.2 <strong>切到 AM 解调链</strong>（外接包络或同步检波），测 <strong>Vpp_AM</strong>：</p>
+<ul>
+<li>SNR_FM 低、而 Vpp_AM 中‑高 ⇒ <strong>AM</strong>。</li>
+<li>SNR_FM 低、Vpp_AM ≈ 0 ⇒ <strong>CW（或几乎未调制）</strong>。</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>
+<p>选定体制后，进入 <strong>AGC 闭环</strong>把输出锁到 1 V ±0.1 Vpp。</p>
+</li>
+</ol>
+<hr>
+<h2 id="b-fm-%E6%89%AB%E5%8F%B0%E4%BC%9A%E6%8A%8A-amcw-%E4%B9%9F%E6%89%AB%E8%BF%9B%E6%9D%A5%E7%9A%84%E6%84%8F%E6%80%9D">B. “FM 扫台会把 AM/CW 也扫进来”的意思</h2>
+<p>Si47xx 的 <strong>seek 判定首先依赖 RSSI/VALID</strong>（“这有个强载波/像频道”），而不是“它是 FM/AM 吗”。因此<strong>强 AM 或 CW</strong> 在该频点也会被认为“有台”，进入候选集合；但一旦你在该点<strong>尝试 FM 解调</strong>，就会发现 <strong>SNR_FM 很低、音频失真/能量低</strong>，这时再切到 AM 检波看 Vpp_AM，就能把它们分出来。这就是上面流程第 2 步的意义。Si47xx 的编程指南里也专门说，命令会回<strong>RSSI、SNR、VALID</strong>等状态做质量判断。(<a href="https://www.skyworksinc.com/-/media/Skyworks/SL/documents/public/application-notes/AN332.pdf?utm_source=chatgpt.com" title="AN332: Si47xx Programming Guide - skyworksinc.com">skyworksinc.com</a>)</p>
+<hr>
+<h2 id="c-rc-%E5%8C%85%E7%BB%9C%E8%83%BD%E4%B8%8D%E8%83%BD%E7%94%A8%E6%9C%89%E6%B2%A1%E6%9C%89%E6%9B%B4%E7%A8%B3%E7%9A%84%E5%81%9A%E6%B3%95">C. “RC 包络能不能用？有没有更稳的做法？”</h2>
+<p><strong>C‑1. 最简：二极管 + RC（包络检波）</strong></p>
+<ul>
+<li>原理：检波二极管把 88–108 MHz 的高频整流，RC 低通留下 300 Hz–3.4 kHz 包络。</li>
+<li>选型&amp;参数：<strong>BAT54（肖特基）</strong> 或 1N4148；R≈4.7 kΩ，C≈22–33 nF（f_{‑3 dB}≈1 kHz），就能覆盖语音带宽。做法正确时可以满足“无明显失真”的竞赛要求。(<a href="https://www.ee-diary.com/2023/01/Designing-Envelope-Detector-Circuit-AM-Demodulation.html?utm_source=chatgpt.com" title="Designing an Envelope Detector Circuit for AM Demodulation">ee-diary</a>)</li>
+<li>注意：检波输出阻抗较高，后面要<strong>缓冲</strong>（见 C‑3）。</li>
+</ul>
+<p><strong>C‑2. 更稳的“集成包络”</strong></p>
+<ul>
+<li>
+<p>用<strong>专用 RF 包络/对数检波器</strong>，对 –85…–60 dBm 的小信号更友好、带宽余量大、对飞线更不敏感：</p>
+<ul>
+<li><strong>LT5534</strong>（50 MHz–3 GHz，60 dB 动态范围），直接出 DC 包络，后面再 AC 耦合成音频。(<a href="https://www.analog.com/media/en/technical-documentation/data-sheets/5534fc.pdf?utm_source=chatgpt.com" title="LT5534 - 50MHz to 3GHz RF Power Detector with 60dB Dynamic Range - Analog">模拟芯片官网</a>)</li>
+<li><strong>ADL5513</strong>（1 MHz–4 GHz，对数检波，响应快），也常见于现成模块。(<a href="https://www.analog.com/cn/products/adl5513.html?utm_source=chatgpt.com" title="ADL5513 | datasheet and product info 1 MH&lt;font style=&quot;text ...">模拟芯片官网</a>)</li>
+</ul>
+</li>
+<li>
+<p>这些芯片在国内电商/现货模块上都<strong>较好买</strong>（常见“LT5534 检波模块”“ADL5513 功率检波模块”关键词）。</p>
+</li>
+</ul>
+<p><strong>C‑3. 缓冲与切换（为什么提 74HC4053 / 射随）</strong></p>
+<ul>
+<li><strong>缓冲</strong>：无论二极管还是检波芯片，输出都不适合直接拖 8 Ω 负载；加一个<strong>射随或单电源运放</strong>把阻抗降下来，失真会明显小。</li>
+<li><strong>切换</strong>：用 <strong>74HC4053</strong> 把“FM 解调音频（Si47xx）/AM 检波音频/静音”三路切到同一后级功放，便于 MCU 全自动体制切换。</li>
+</ul>
+<p><strong>C‑4. 同步/乘法检波（更“教科书式”的 AM）</strong></p>
+<ul>
+<li>用 <strong>SA612/NE602</strong>（500 MHz 信号、200 MHz 本振可用），把载波与本振相乘得到基带（相当于同步检波）。需要给它一个 88–108 MHz 的本振；本振偏差会带来失真，但对语音宽带要求不高时可接受。(<a href="https://www.nxp.com/docs/en/data-sheet/SA612A.pdf?utm_source=chatgpt.com" title="SA612A Double-balanced mixer and oscillator - NXP Semiconductors">NXP半导体</a>, <a href="https://www.alldatasheet.com/datasheet-pdf/pdf/18897/PHILIPS/SA612.html?utm_source=chatgpt.com" title="SA612 Datasheet (PDF) - NXP Semiconductors">AllDatasheet</a>)</li>
+<li>优点：对弱 AM（接近 –85 dBm）更稳；缺点：要加 LO（VCO/小晶振/锁相），硬件复杂度高于 C‑2。</li>
+</ul>
+<blockquote>
+<p><strong>推荐取舍</strong>：若时间紧、要抗飞线与失配风险，<strong>优先 C‑2（LT5534/ADL5513 模块）</strong>；其余保持简洁：缓冲 + 4053 切换即可。</p>
+</blockquote>
+<hr>
+<h2 id="d-%E8%A6%81%E4%B8%8D%E8%A6%81%E5%86%8D%E5%8A%A0-lna%E4%BF%A1%E5%8F%B7%E6%80%8E%E4%B9%88%E8%B5%B0">D. 要不要再加 LNA？信号怎么走？</h2>
+<p><strong>竞赛输入范围 –85…–60 dBm</strong>。Si4732 的 FM 前端自带 LNA/AGC，<strong>FM 路不需要再加 LNA</strong>。AM 路若用 <strong>二极管 RC</strong>，在 –85 dBm 处确实偏勉强；若改用 <strong>LT5534/ADL5513</strong>，就<strong>不必额外 LNA</strong>。真的担心裕量，可以加<strong>可旁路的前置 LNA（+15 dB）</strong>，但要考虑在 –60 dBm 端不会把 FM 前端推饱和（用继电器/开关在 AM 需要时才插入）。</p>
+<p><strong>推荐走线/方框图：</strong></p>
+<pre class="hljs"><code><div>SMA(50Ω) ── 50Ω分路 ┬── 路A：Si4732（FM解调）──► Audio_A
+                     │
+                     └── 路B：AM检波(二选一)
+                           [简易]二极管+RC+缓冲
+                           [稳妥]LT5534/ADL5513模块+缓冲 ─► Audio_B
+Audio_A / Audio_B  ── 74HC4053(受MCU控制) ──► PAM8403(8Ω) ─► 1 Vpp 目标
+</div></code></pre>
+<blockquote>
+<p><strong>是否“经过”Si4732？</strong>
+AM 体制时<strong>不走 Si4732 的解调</strong>，而是<strong>RF 在分路处直接进 AM 检波器</strong>；Si4732 仍用于扫台/读 RSSI/SNR 与体制判定。</p>
+</blockquote>
+<hr>
+<h2 id="e-%E6%9C%89%E6%B2%A1%E6%9C%89%E4%B8%80%E9%A2%97%E8%8A%AF%E7%89%87%E5%BC%8F%E7%9A%84-am-%E8%A7%A3%E8%B0%83%E6%A8%A1%E5%9D%97%E5%9B%BD%E5%86%85%E5%A5%BD%E4%B9%B0">E. 有没有“一颗芯片式”的 AM 解调模块（国内好买）？</h2>
+<p>有两类，<strong>都常见有成品小板</strong>：</p>
+<ul>
+<li><strong>RF 包络检波模块</strong>：基于 <strong>LT5534</strong>（50 MHz–3 GHz）或 <strong>ADL5513</strong>（1 MHz–4 GHz），直出包络（后面简单去直流即可得到音频）。指标、带宽、动态范围都远胜“裸二极管 RC”。(<a href="https://www.analog.com/media/en/technical-documentation/data-sheets/5534fc.pdf?utm_source=chatgpt.com" title="LT5534 - 50MHz to 3GHz RF Power Detector with 60dB Dynamic Range - Analog">模拟芯片官网</a>, <a href="https://www.analog.com/cn/products/adl5513.html?utm_source=chatgpt.com" title="ADL5513 | datasheet and product info 1 MH&lt;font style=&quot;text ...">模拟芯片官网</a>)</li>
+<li><strong>同步检波/乘法检波模块</strong>：基于 <strong>SA612/NE602</strong>。你还需要一个 88–108 MHz 的本振（可以用小 VCO/压控+分频），整体更复杂。(<a href="https://www.nxp.com/docs/en/data-sheet/SA612A.pdf?utm_source=chatgpt.com" title="SA612A Double-balanced mixer and oscillator - NXP Semiconductors">NXP半导体</a>, <a href="https://www.alldatasheet.com/datasheet-pdf/pdf/18897/PHILIPS/SA612.html?utm_source=chatgpt.com" title="SA612 Datasheet (PDF) - NXP Semiconductors">AllDatasheet</a>)</li>
+</ul>
+<p><strong>考虑赛程与搭棚风险</strong>：优先买 <strong>LT5534（或 ADL5513）小模块</strong>做 AM 路，一根同轴把 RF 分出来接过去，几乎“即插即用”。</p>
+<hr>
+<h2 id="f-1-v-%C2%B101-vpp-%E7%9A%84-agc-%E8%BF%98%E5%9D%9A%E6%8C%81%E5%8F%AA%E9%9D%A0-63-%E7%BA%A7%E9%9F%B3%E9%87%8F%E5%90%97">F. 1 V ±0.1 Vpp 的 AGC 还坚持“只靠 63 级音量”吗？</h2>
+<p>你担心得对：<strong>1 dB/级</strong> 的数字音量，电压步进 ≈ <strong>+12 %</strong>，确实<strong>比 ±10 % 的目标还“粗”</strong>。但这不是死局：</p>
+<ul>
+<li>方案 1（硬件细调）：在 Si4732 后加 <strong>数字电位器/可编程衰减器</strong>（如 256 级），做“<strong>粗调（1 dB）+ 细调（0.4 dB）</strong>”。</li>
+<li>方案 2（纯软件抖动）：在 50 ms 控制周期里，在 <strong>N 与 N+1 两档间按占空比切换</strong>，等效得到“亚 1 dB”的平均增益（常用于音频/电源数字控制，听感无拍频）。</li>
+<li>无论哪种，PAM8403 的<strong>固定电压增益 24 dB</strong>是常规值，足够；它本身不提供细颗粒度增益，调节仍放在前级实现。(<a href="https://www.digikey.com/htmldatasheets/production/1282043/0/0/1/pam8403.html?utm_source=chatgpt.com" title="PAM8403 Datasheet by Diodes Incorporated - Digi-Key Electronics">DigiKey</a>, <a href="https://www.alldatasheet.com/datasheet-pdf/pdf/246505/PAM/PAM8403.html?utm_source=chatgpt.com" title="PAM8403 Datasheet (PDF) - Power Analog Micoelectronics">AllDatasheet</a>)</li>
+</ul>
+<hr>
+<h2 id="%E6%9C%80%E5%90%8E%E5%86%8D%E5%9B%9E%E7%AD%94%E4%B8%A4%E5%8F%A5%E4%BD%A0%E6%8F%90%E5%88%B0%E7%9A%84%E8%8A%AF%E7%89%87%E5%88%B0%E5%BA%95%E8%83%BD%E4%B8%8D%E8%83%BD-am%E7%9A%84%E6%A0%B9%E5%9B%A0">最后，再回答两句你提到的“芯片到底能不能 AM”的根因</h2>
+<p><strong>Si4732 的频段：FM 64–108 MHz；AM 520–1710 kHz（另有 LW/SW）</strong>。也就是说，<strong>它的 AM 解调并不覆盖 88–108 MHz</strong>，所以我们才需要 AM 外挂检波链路。这在多个官方/渠道版 datasheet 上都写得很清楚。(<a href="https://pdf.ic37.com/SILABS/SI4732-A10-GSR_datasheet_20065541/?utm_source=chatgpt.com" title="SI4732-A10-GSR (SILICON) PDF技术资料下载 SI4732-A10 ...">pdf.ic37.com</a>, <a href="https://www.mouser.com/datasheet/2/472/Si4732_A10_short-2492991.pdf?utm_source=chatgpt.com" title="Si4732-A10 Broadcast AM/FM/SW/LW/RDS Radio Receiver - Mouser Electronics">Mouser</a>)</p>
+<hr>
+<h3 id="%E4%BD%A0%E5%8F%AF%E4%BB%A5%E7%9B%B4%E6%8E%A5%E7%85%A7%E7%9D%80%E5%B9%B2%E7%9A%84%E6%9C%80%E5%B0%8F%E6%94%B9%E5%8A%A8%E7%89%88%E6%96%B9%E6%A1%88">你可以直接照着干的最小改动版方案</h3>
+<ul>
+<li><strong>FM 路</strong>：保持 Si4732（扫台、解调、读 SNR）。</li>
+<li><strong>AM 路</strong>：买 <strong>LT5534（或 ADL5513）模块</strong> → 模块输出经缓冲 → 进 74HC4053。</li>
+<li><strong>分路</strong>：SMA 后用 50 Ω 电阻三分器/微型功分器分成 Si4732 和 AM 模块两路。</li>
+<li><strong>体制判别</strong>：按“FM‑SNR 高即 FM；否则看 AM‑Vpp；两者皆低即 CW”那套阈值法。</li>
+<li><strong>AGC</strong>：保留 Si4732 63 级作“粗调”，再加“细调”（数字电位器或抖动法），就能稳到 <strong>1 V ±0.1 Vpp</strong>。</li>
+</ul>
+<p>需要的话，我可以把<strong>阈值判别伪代码 + 4053 控制时序 + AGC 抖动实现</strong>写成 80 行以内的示例给你。届时也可以把你 tinySA 的幅度‑阈值标定脚本一起补上。</p>
+
+</body>
+</html>

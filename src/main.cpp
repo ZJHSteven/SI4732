@@ -37,7 +37,7 @@ void setup()
   Wire.begin(21, 22, 400000);
 
   /* Si4732-A10：SEN 接 VDD → I²C 0x63 */
-  radio.setDeviceI2CAddress(1); // SEN=HIGH
+  radio.setDeviceI2CAddress(0); // 选择 0x11
   radio.setup(PIN_RST, 0);      // 默认 FM 模式启动
   // ----------- 新写法（10 kHz 单位）---------
   radio.setFM(FM_MIN_MHZ * 100,                 // 6400   → 64.00 MHz

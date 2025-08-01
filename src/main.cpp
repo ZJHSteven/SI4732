@@ -1,126 +1,83 @@
-/***********************************************************************
- *  Si4732 自动搜台 + 调制判别 + AGC（无中断版，库 ≥2.1.4）
- **********************************************************************/
+/*
+ *  ESP32 + Si4732-A10   （PU2CLR SI4735 库 ≥ 2.1.4）
+ *  功能：从 108 MHz 向下自动搜台，打印频率 / RSSI / SNR
+ *  时序全部采用轮询，无任何中断线。
+ *  -----------------------------------------------
+ *  接线：
+ *     ESP32      Si4732
+ *     GPIO21 --- SDA
+ *     GPIO22 --- SCL
+ *     GPIO27 --- RST
+ *               SEN → Vdd (I²C = 0x63，库可自动检测)
+ *     32.768 kHz 晶体 → XOSC
+ */
+
 #include <Wire.h>
 #include <SI4735.h>
 
+#define RST_PIN 27 // 复位
 SI4735 radio;
 
-/* ─────── 引脚定义 ────────────────────────────────────────────── */
-#define PIN_RST 27
-#define AUDIO_PEAK_PIN 36 // ADC1_CH0 (VP)
-#define SPEAKER_MUTE 4
-
-#define FM_MIN_MHZ 64
-#define FM_MAX_MHZ 108
-#define AM_MIN_KHZ 520
-#define AM_MAX_KHZ 1710
-
-#define RSSI_THRESHOLD 20 // dBµV
-#define SNR_THRESHOLD 15  // dB
-#define CW_VARIANCE_TH 300
-
-static uint8_t calcVolume(uint16_t peak)
+// ─────── 工具：等待 STCINT 置位（轮询）─────────
+void waitForSTC()
 {
-  uint8_t vol = map(peak, 50, 3000, 5, 55);
-  return constrain(vol, 0, 63);
+  while (!radio.getTuneCompleteTriggered())
+  {            // 轮询 STC 标志
+    delay(20); // 20 ms 足够
+  }
 }
-bool isCW(uint32_t v) { return v > CW_VARIANCE_TH; }
 
-/* ─────── 初始化 ─────────────────────────────────────────────── */
 void setup()
 {
   Serial.begin(115200);
-  pinMode(SPEAKER_MUTE, OUTPUT);
-  digitalWrite(SPEAKER_MUTE, LOW);
+  Wire.begin(21, 22, 400000); // 400 kHz I²C
 
-  Wire.begin(21, 22, 400000);
+  /* 1. 自动侦测 I²C 地址（0x11 ↔ 0x63）
+   *    此调用既返回地址，也把地址写进库内部，
+   *    后面无需再 setDeviceI2CAddress()。    */
+  if (radio.getDeviceI2CAddress(RST_PIN) == 0)
+  {
+    Serial.println("Si47xx 未响应，检查接线！");
+    while (1)
+      ; // 死等
+  }
 
-  /* Si4732-A10：SEN 接 VDD → I²C 0x63 */
-  radio.setDeviceI2CAddress(1); // 选择 0x63
-  radio.setup(PIN_RST, 0);      // 默认 FM 模式启动
-  // ----------- 新写法（10 kHz 单位）---------
-  radio.setFM(FM_MIN_MHZ * 100,                 // 6400   → 64.00 MHz
-              FM_MAX_MHZ * 100,                 // 10800  → 108.00 MHz
-              FM_MAX_MHZ * 100,                 // 10800  → 108.00 MHz (修复溢出)
-              10);                              // 10×10 kHz = 100 kHz 步进
-  radio.setSeekFmSpacing(10);                   // 同理，搜台网格也改成 10
-  radio.setSeekFmSNRThreshold(SNR_THRESHOLD);   // ✔ 正确命名
-  radio.setSeekFmRssiThreshold(RSSI_THRESHOLD); // ✔ 正确命名
+  /* 2. 上电到 FM，使用板上 32 kHz 晶体 */
+  radio.setup(RST_PIN, 0);
 
-  radio.setVolume(30);
+  /* 3. 配置 FM 波段
+   *    单位 = 10 kHz；6400=64 MHz，10800=108 MHz  */
+  radio.setFM(6400, 10800, 10800, 10); // 从 108 MHz 起步
+  radio.setSeekFmSpacing(10);          // 100 kHz 网格
+
+  radio.setSeekFmRssiThreshold(10);    // dBµV，阈值可放宽
+  radio.setSeekFmSNRThreshold(5);      // dB
 }
 
-/* ─────── 主循环（轮询） ─────────────────────────────────────── */
 void loop()
 {
-  static bool scanningFM = true;
-  static uint32_t lastTuneMs = 0;
+  /* 发一次向下搜台命令（SEEK DOWN） */
+  radio.seekStationDown();
 
-  if (millis() - lastTuneMs > 1000)
+  /* 轮询等待 STC 完成标志 */
+  waitForSTC();
+
+  /* 读取当前频道的信号质量 —— 必须先发 RSQ 查询 */
+  radio.getCurrentReceivedSignalQuality(); // :contentReference[oaicite:0]{index=0}
+  uint8_t rssi = radio.getCurrentRSSI();
+  uint8_t snr = radio.getCurrentSNR();
+  float freq = radio.getFrequency() / 100.0; // MHz
+
+  Serial.printf("LOCK  %6.2f MHz   RSSI=%u dBµV   SNR=%u dB\n",
+                freq, rssi, snr);
+
+  /* 如果已到 64 MHz 带端，任务结束 */
+  if (radio.getBandLimit())
   {
-    lastTuneMs = millis();
-
-    /* 搜台：先 FM → 上限后切 AM */
-    radio.seekStationUp();
-    if (radio.getBandLimit())
-    {
-      scanningFM = !scanningFM;
-      if (scanningFM)
-      {
-        radio.setFM(FM_MIN_MHZ * 100, FM_MAX_MHZ * 100,
-                    FM_MIN_MHZ * 100, 10);
-      }
-      else
-      {
-        radio.setAM(AM_MIN_KHZ, AM_MAX_KHZ,
-                    AM_MIN_KHZ, 9);
-        radio.setSeekAmSpacing(9);
-        radio.setSeekAmSNRThreshold(SNR_THRESHOLD);
-        radio.setSeekAmRssiThreshold(RSSI_THRESHOLD);
-      }
-    }
-
-    /* ---------- 信号质量 ---------- */
-    uint8_t rssi = radio.getCurrentRSSI();
-    uint8_t snr = radio.getCurrentSNR();
-
-    /* ---------- 包络方差检测 CW ---------- */
-    const uint8_t N = 40;
-    uint32_t sum = 0, sumSq = 0;
-    for (uint8_t i = 0; i < N; ++i)
-    {
-      uint16_t s = analogRead(AUDIO_PEAK_PIN);
-      sum += s;
-      sumSq += (uint32_t)s * s;
-      delay(2);
-    }
-    uint32_t mean = sum / N;
-    uint32_t variance = (sumSq / N) - (mean * mean);
-
-    String mode;
-    if (scanningFM)
-      mode = "FM";
-    else if (isCW(variance))
-      mode = "CW";
-    else
-      mode = "AM";
-
-    /* ---------- AGC ---------- */
-    radio.setVolume(calcVolume(mean));
-
-    /* ---------- 调试输出 ---------- */
-    if (scanningFM)
-    { // FM：10 kHz 单位→ MHz
-      Serial.printf("FM  %6.2f MHz  RSSI=%u dBµ  SNR=%u dB  Vol=%u  Var=%lu\n",
-                    radio.getFrequency() / 100.0, // ÷100 → MHz
-                    rssi, snr, radio.getVolume(), variance);
-    }
-    else
-    { // AM：已是 1 kHz 单位
-      Serial.printf("AM  %6u kHz  RSSI=%u dBµ  SNR=%u dB  Vol=%u  Var=%lu\n",
-                    radio.getFrequency(),
-                    rssi, snr, radio.getVolume(), variance);
-    }
+    Serial.println("扫完整个 FM 波段，退出。");
+    while (1)
+      delay(1000);
   }
+
+  delay(50); // 小息，便于串口刷新
 }

@@ -47,7 +47,7 @@ void setup()
 
   /* 3. 配置 FM 波段
    *    单位 = 10 kHz；6400=64 MHz，10800=108 MHz  */
-  radio.setFM(6400, 10800, 10800, 10); // 从 108 MHz 起步
+  radio.setFM(6400, 10800, 6400, 10); // 从 108 MHz 起步
   radio.setSeekFmSpacing(10);          // 100 kHz 网格
 
   radio.setSeekFmRssiThreshold(10);    // dBµV，阈值可放宽
@@ -56,28 +56,19 @@ void setup()
 
 void loop()
 {
-  /* 发一次向下搜台命令（SEEK DOWN） */
-  radio.seekStationDown();
-
-  /* 轮询等待 STC 完成标志 */
-  waitForSTC();
-
-  /* 读取当前频道的信号质量 —— 必须先发 RSQ 查询 */
-  radio.getCurrentReceivedSignalQuality(); // :contentReference[oaicite:0]{index=0}
-  uint8_t rssi = radio.getCurrentRSSI();
-  uint8_t snr = radio.getCurrentSNR();
-  float freq = radio.getFrequency() / 100.0; // MHz
-
-  Serial.printf("LOCK  %6.2f MHz   RSSI=%u dBµV   SNR=%u dB\n",
-                freq, rssi, snr);
-
-  /* 如果已到 64 MHz 带端，任务结束 */
-  if (radio.getBandLimit())
+  // 只做一次：定到 108.00 MHz
+  static bool tuned = false;
+  if (!tuned)
   {
-    Serial.println("扫完整个 FM 波段，退出。");
-    while (1)
-      delay(1000);
+    radio.setFrequency(10800); // 单位=10kHz → 10800=108.00 MHz
+    tuned = true;
   }
 
-  delay(50); // 小息，便于串口刷新
+  // 轮询 RSQ（先请求，再读 RSSI/SNR）
+  radio.getCurrentReceivedSignalQuality();
+  uint8_t rssi = radio.getCurrentRSSI();
+  uint8_t snr = radio.getCurrentSNR();
+  Serial.printf("MEAS 108.00 MHz  RSSI=%u dBµV  SNR=%u dB\n", rssi, snr);
+
+  delay(200);
 }

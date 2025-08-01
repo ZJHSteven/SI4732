@@ -1,74 +1,84 @@
-/*
- *  ESP32 + Si4732-A10   （PU2CLR SI4735 库 ≥ 2.1.4）
- *  功能：从 108 MHz 向下自动搜台，打印频率 / RSSI / SNR
- *  时序全部采用轮询，无任何中断线。
- *  -----------------------------------------------
- *  接线：
- *     ESP32      Si4732
- *     GPIO21 --- SDA
- *     GPIO22 --- SCL
- *     GPIO27 --- RST
- *               SEN → Vdd (I²C = 0x63，库可自动检测)
- *     32.768 kHz 晶体 → XOSC
- */
-
 #include <Wire.h>
 #include <SI4735.h>
-
-#define RST_PIN 27 // 复位
+#define RST_PIN 27
 SI4735 radio;
 
-// ─────── 工具：等待 STCINT 置位（轮询）─────────
-void waitForSTC()
+struct Hit
 {
-  while (!radio.getTuneCompleteTriggered())
-  {            // 轮询 STC 标志
-    delay(20); // 20 ms 足够
+  uint16_t f10k;
+  uint8_t rssi;
+  uint8_t snr;
+};
+
+static inline void readRSQ(uint8_t &rssi, uint8_t &snr)
+{
+  radio.getCurrentReceivedSignalQuality();
+  rssi = radio.getCurrentRSSI();
+  snr = radio.getCurrentSNR();
+}
+
+// 将一个候选写入Top-N（按SNR优先，RSSI次之）
+static void pushTopN(Hit hit, Hit top[], int N)
+{
+  for (int i = 0; i < N; ++i)
+  {
+    if (hit.snr > top[i].snr || (hit.snr == top[i].snr && hit.rssi > top[i].rssi))
+    {
+      for (int j = N - 1; j > i; --j)
+        top[j] = top[j - 1];
+      top[i] = hit;
+      break;
+    }
   }
 }
 
 void setup()
 {
   Serial.begin(115200);
-  Wire.begin(21, 22, 400000); // 400 kHz I²C
+  Wire.begin(21, 22, 800000);
 
-  /* 1. 自动侦测 I²C 地址（0x11 ↔ 0x63）
-   *    此调用既返回地址，也把地址写进库内部，
-   *    后面无需再 setDeviceI2CAddress()。    */
   if (radio.getDeviceI2CAddress(RST_PIN) == 0)
   {
-    Serial.println("Si47xx 未响应，检查接线！");
+    Serial.println("Si47xx 未响应。");
     while (1)
-      ; // 死等
+      delay(1000);
   }
-
-  /* 2. 上电到 FM，使用板上 32 kHz 晶体 */
   radio.setup(RST_PIN, 0);
-
-  /* 3. 配置 FM 波段
-   *    单位 = 10 kHz；6400=64 MHz，10800=108 MHz  */
-  radio.setFM(6400, 10800, 8800, 10);  // 从 88 MHz 起步
-  radio.setSeekFmSpacing(10);          // 100 kHz 网格
-
-  radio.setSeekFmRssiThreshold(10);    // dBµV，阈值可放宽
-  radio.setSeekFmSNRThreshold(5);      // dB
+  radio.setFM(6400, 10800, 8800, 10); // 波段参数；步进只影响seek，不影响手动扫
+  radio.setAudioMode(SI473X_ANALOG_AUDIO);
+  radio.setVolume(40);
 }
 
 void loop()
 {
-  // 只做一次：定到 108.00 MHz
-  static bool tuned = false;
-  if (!tuned)
+  const uint16_t START_10K = 8800, STOP_10K = 10800; // 88.00~108.00 MHz
+  const uint16_t STEP_10K = 10;                      // 100 kHz
+  const uint16_t SETTLE_MS = 1;                     // 每步稳定时间 8~12ms
+
+  Hit top[5] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
+  uint32_t t0 = millis();
+
+  // —— 快扫：不打印，只保留Top-5 —— //
+  for (uint16_t f10k = START_10K; f10k <= STOP_10K; f10k += STEP_10K)
   {
-    radio.setFrequency(10800); // 单位=10kHz → 10800=108.00 MHz
-    tuned = true;
+    radio.setFrequency(f10k);
+    delay(SETTLE_MS); // 关键：短暂停就够
+    uint8_t rssi, snr;
+    readRSQ(rssi, snr);
+    pushTopN({f10k, rssi, snr}, top, 5);
   }
 
-  // 轮询 RSQ（先请求，再读 RSSI/SNR）
-  radio.getCurrentReceivedSignalQuality();
-  uint8_t rssi = radio.getCurrentRSSI();
-  uint8_t snr = radio.getCurrentSNR();
-  Serial.printf("MEAS 108.00 MHz  RSSI=%u dBµV  SNR=%u dB\n", rssi, snr);
+  uint32_t elapsed = millis() - t0;
 
-  delay(200);
+  // —— 一次性输出 —— //
+  Serial.printf("SWEEP DONE: %lu ms\n", (unsigned long)elapsed);
+  for (int i = 0; i < 5; ++i)
+  {
+    if (top[i].f10k)
+      Serial.printf("#%d  %6.2f MHz  RSSI=%u dBµV  SNR=%u dB\n",
+                    i + 1, top[i].f10k / 100.0, top[i].rssi, top[i].snr);
+  }
+
+  // 如果要连续循环扫，延时一下再来；比赛只需一次就改成 while(1)。
+  delay(500);
 }

@@ -39,10 +39,12 @@ void setup()
   /* Si4732-A10：SEN 接 VDD → I²C 0x63 */
   radio.setDeviceI2CAddress(1); // SEN=HIGH
   radio.setup(PIN_RST, 0);      // 默认 FM 模式启动
-
-  radio.setFM(FM_MIN_MHZ * 1000, FM_MAX_MHZ * 1000,
-              100700, 200);
-  radio.setSeekFmSpacing(200);
+  // ----------- 新写法（10 kHz 单位）---------
+  radio.setFM(FM_MIN_MHZ * 100,                 // 6400   → 64.00 MHz
+              FM_MAX_MHZ * 100,                 // 10800  → 108.00 MHz
+              10070,                            // 100.70 MHz
+              10);                              // 20×10 kHz = 200 kHz 步进
+  radio.setSeekFmSpacing(10);                   // 同理，搜台网格也改成 10
   radio.setSeekFmSNRThreshold(SNR_THRESHOLD);   // ✔ 正确命名 :contentReference[oaicite:2]{index=2}
   radio.setSeekFmRssiThreshold(RSSI_THRESHOLD); // ✔ 正确命名 :contentReference[oaicite:3]{index=3}
 
@@ -66,8 +68,8 @@ void loop()
       scanningFM = !scanningFM;
       if (scanningFM)
       {
-        radio.setFM(FM_MIN_MHZ * 1000, FM_MAX_MHZ * 1000,
-                    FM_MIN_MHZ * 1000, 200);
+        radio.setFM(FM_MIN_MHZ * 100, FM_MAX_MHZ * 100,
+                    FM_MIN_MHZ * 100, 10);
       }
       else
       {

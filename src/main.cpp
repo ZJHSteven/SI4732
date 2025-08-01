@@ -42,7 +42,7 @@ void setup()
 void loop()
 {
   /* —— ① 读取当前射频 —— */
-  uint32_t rfHz = readRFfromOtherModule(); // TODO: 换成你真实采集函数
+  uint32_t rfHz = 100000000UL; // TODO: 换成你真实采集函数
 
   /* —— ② 计算本振 —— */
   uint32_t loHz = rfHz - IF_Hz; // 低变频：LO = RF – IF
@@ -63,12 +63,3 @@ void loop()
   delay(10); // 根据系统需求调采样间隔；>100 µs PLL 就能锁
 }
 
-/* ---------- ④ 示例桩函数：用固定值代替实际射频读取 ---------- */
-uint32_t readRFfromOtherModule()
-{
-  static uint32_t rf = 145000000UL; // 启动时 145 MHz
-  rf += 100000UL;                   // 每圈 +100 kHz（演示）
-  if (rf > 146000000UL)
-    rf = 145000000UL;
-  return rf;
-}

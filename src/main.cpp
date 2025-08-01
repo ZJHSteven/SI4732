@@ -1,65 +1,148 @@
-#include <Arduino.h>
-#include <ADF4351.h> // 内部已 #include <SPI.h>
+/***********************************************************************
+ *  Si4732 自动搜台 + AM／FM／CW 判别 + 音量/AGC 闭环  (ESP32)
+ *  -- 2025 电赛 FT 自动调谐接收机演示
+ *  硬件与连线见“上下文提示词”表格
+ **********************************************************************/
+#include <Wire.h>
+#include <SI4735.h>
 
-/* ───────────────────────── ① 用户可改区 ───────────────────────── */
-// --- 参考时钟 & 中频 ---
-constexpr uint32_t REF_Hz = 50000000UL; // 板载 50 MHz 晶振（看你 PCB 标注 50.000 MHz）
-constexpr uint32_t IF_Hz = 10700000UL;  // 中频 10.7 MHz（SA602）
+SI4735 radio;
 
-// --- ESP32 ↔ ADF4351 引脚映射 ---
-constexpr uint8_t ADF_LE = 5;    // SPI-CS / LE   （U8 图中 D5 → ADF4351 LE）
-constexpr uint8_t ADF_SCK = 18;  // SPI-CLK       （D18 → CLK）
-constexpr uint8_t ADF_MOSI = 23; // SPI-MOSI      （D23 → DATA）
-constexpr int8_t ADF_MISO = -1;  // SPI-MISO不用
-constexpr uint8_t ADF_CE = 32;   // PLL_CE        （D32 → CE）
-constexpr uint8_t ADF_LD = 33;   // PLL_LD (可选) （D33 → LD）
-// ───────────────────────────────────────────────────────────────── */
+/* ─────── 用户可调常量 ─────────────────────────────────────────── */
+#define PIN_RST 27
+#define PIN_INT 25        // 若未接中断，可注释掉 INT 相关代码
+#define AUDIO_PEAK_PIN 36 // ADC1_CH0  (VP)
+#define SPEAKER_MUTE 4    // PAM8403 SHDN
 
-ADF4351 vfo(ADF_LE, SPI_MODE0, 1000000UL, MSBFIRST);//  1 MHz SPI，Mode0，MSB first
+#define FM_MIN_MHZ 64
+#define FM_MAX_MHZ 108
+#define AM_MIN_KHZ 520
+#define AM_MAX_KHZ 1710
 
-/* ========================= ② 只跑一次 ========================= */
+#define RSSI_THRESHOLD 20  // dBμV，低于此视为无台
+#define SNR_THRESHOLD 15   // dB
+#define CW_VARIANCE_TH 300 // 音频包络方差阈值，区分 AM 语音 vs. CW
+
+/* AGC: 读音频峰值，把 0–3.3 V → 0-4095 映射到库 0-63 音量 */
+static uint8_t calcVolume(uint16_t peak)
+{
+  // 根据实测线性或对数映射，自行微调
+  uint8_t vol = map(peak, 50, 3000, 5, 55);
+  vol = constrain(vol, 0, 63);
+  return vol;
+}
+
+/* 快速检测 CW（简单包络方差法，可替换为更复杂 DSP） */
+bool isCW(uint32_t variance)
+{
+  return variance > CW_VARIANCE_TH;
+}
+
+/* 读取 RSSI/SNR（库 2.1.x 建议先调用 getCurrentReceivedSignalQuality()） */
+void readSignalQuality(uint8_t &rssi, uint8_t &snr)
+{
+  radio.getCurrentReceivedSignalQuality(1);          // 清 RSQINT
+  rssi = radio.getReceivedSignalStrengthIndicator(); // dBμV
+  snr = radio.getStatusSNR();                        // dB
+}
+
+/* ─────── 初始化 ─────────────────────────────────────────────── */
 void setup()
 {
   Serial.begin(115200);
+  pinMode(SPEAKER_MUTE, OUTPUT);
+  digitalWrite(SPEAKER_MUTE, LOW);
 
-  // 初始化硬件 SPI：CLK / MISO / MOSI / SS
-  SPI.begin(ADF_SCK, ADF_MISO, ADF_MOSI, ADF_LE);
+  Wire.begin(21, 22, 400000); // SDA, SCL, 400 kHz
+  pinMode(PIN_RST, OUTPUT);
+  digitalWrite(PIN_RST, LOW);
+  delay(10);
+  digitalWrite(PIN_RST, HIGH);
+  delay(50);
 
-  // 把 CE 拉高 —— 必须常高；库 **不会** 自动替你控制这根脚
-  pinMode(ADF_CE, OUTPUT);
-  digitalWrite(ADF_CE, HIGH);
+  // 如果用 INT，加上这句；否则省略
+  pinMode(PIN_INT, INPUT_PULLUP);
 
-  // 锁定 LD 状态检测（可选）
-  pinMode(ADF_LD, INPUT_PULLUP);
+  // 建议让库自己探测 I²C 地址：radio.getDeviceI2CAddress()
+  radio.setup(0x63); // SEN 接 VDD 固定 0x63（库 2.1.x 兼容） :contentReference[oaicite:0]{index=0}
 
-  /* ------- ADF4351 上电初始化，只需做一次 ------- */
-  vfo.setrf(REF_Hz); // (1) 告诉库：板上参考 = 50 MHz
-  vfo.init();        // (2) 把 R5→R0 全写入
-  vfo.enable();      // (3) 打开 RF 输出（仅写寄存器，不动 CE）
+  /* 默认先进 FM，64-108 MHz，初始 100.7 MHz，步进 200 kHz */
+  radio.setFM(FM_MIN_MHZ * 1000, FM_MAX_MHZ * 1000, 100700, 200); // :contentReference[oaicite:1]{index=1}
+  radio.setSeekFmSpacing(200);                                    // 200 kHz 网格
+  radio.setSeekFmSNRThreshold(SNR_THRESHOLD);
+  radio.setSeekFmRssiThreshold(RSSI_THRESHOLD);
+
+  /* 若接 INT，可打开 STC/RSQ 中断提高响应 */
+  // radio.setGpioIen(1, 1, 0, 0, 0, 0);  // STCIEN=1, RSQIEN=1 :contentReference[oaicite:2]{index=2}
+
+  radio.setVolume(30); // 预设中等音量
 }
 
-/* ================ ③ 持续循环，可实时改频 ================= */
+/* ─────── 主循环 ─────────────────────────────────────────────── */
 void loop()
 {
-  /* —— ① 读取当前射频 —— */
-  uint32_t rfHz = 100000000UL; // TODO: 换成你真实采集函数
+  static bool scanningFM = true; // 状态机：先扫 FM，再扫 AM
+  static uint32_t lastTuneMs = 0;
 
-  /* —— ② 计算本振 —— */
-  uint32_t loHz = rfHz - IF_Hz; // 低变频：LO = RF – IF
-
-  /* —— ③ 更新 ADF4351 —— */
-  if (vfo.setf(loHz) == 0)
-  {                           // setf() 仅重写必要寄存器
-    if (!digitalRead(PIN_LD)) // LD 低＝锁定成功
-      Serial.printf("RF=%u Hz  →  LO=%.3f MHz (Locked)\n", rfHz, loHz / 1e6);
-    else
-      Serial.println("PLL UNLOCK!");
-  }
-  else
+  /* 每秒执行一次搜台（手动轮询，若接 INT 可改用中断回调） */
+  if (millis() - lastTuneMs > 1000)
   {
-    Serial.println("setf() 计算失败——频率超范围或参数非法");
+    lastTuneMs = millis();
+
+    /* ── 搜台 ───────────────────────── */
+    if (scanningFM)
+    {
+      radio.seekStationUp();    // 向上搜 FM
+      if (radio.getBandLimit()) // 到上限，切 AM
+      {
+        scanningFM = false;
+        radio.setAM(AM_MIN_KHZ, AM_MAX_KHZ, AM_MIN_KHZ, 9); // 9 kHz 步进
+        radio.setSeekAmSpacing(9);
+      }
+    }
+    else
+    {
+      radio.seekStationUp();    // 向上搜 AM
+      if (radio.getBandLimit()) // 到上限，回 FM
+      {
+        scanningFM = true;
+        radio.setFM(FM_MIN_MHZ * 1000, FM_MAX_MHZ * 1000, FM_MIN_MHZ * 1000, 200);
+      }
+    }
+
+    /* ── 判别调制 ───────────────────── */
+    uint8_t rssi, snr;
+    readSignalQuality(rssi, snr);
+
+    // ADC 连续取 N 点计算方差，用于区分 CW
+    const uint8_t N = 40;
+    uint32_t sum = 0, sumSq = 0;
+    for (uint8_t i = 0; i < N; ++i)
+    {
+      uint16_t s = analogRead(AUDIO_PEAK_PIN);
+      sum += s;
+      sumSq += (uint32_t)s * s;
+      delay(2);
+    }
+    uint32_t mean = sum / N;
+    uint32_t variance = (sumSq / N) - (mean * mean);
+
+    String mode;
+    if (scanningFM)
+      mode = "FM";
+    else if (isCW(variance))
+      mode = "CW";
+    else
+      mode = "AM";
+
+    /* ── AGC/音量闭环 ───────────────── */
+    uint8_t volume = calcVolume(mean);
+    radio.setVolume(volume);
+
+    /* ── 调试输出 ───────────────────── */
+    Serial.printf("%s  %7.2f kHz  RSSI=%u dBµ  SNR=%u dB  Vol=%u  Var=%lu\n",
+                  mode.c_str(),
+                  radio.getFrequency() / 10.0,
+                  rssi, snr, volume, variance);
   }
-
-  delay(10); // 根据系统需求调采样间隔；>100 µs PLL 就能锁
 }
-

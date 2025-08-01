@@ -37,16 +37,16 @@ void setup()
   Wire.begin(21, 22, 400000);
 
   /* Si4732-A10：SEN 接 VDD → I²C 0x63 */
-  radio.setDeviceI2CAddress(0); // 选择 0x11
+  radio.setDeviceI2CAddress(1); // 选择 0x63
   radio.setup(PIN_RST, 0);      // 默认 FM 模式启动
   // ----------- 新写法（10 kHz 单位）---------
   radio.setFM(FM_MIN_MHZ * 100,                 // 6400   → 64.00 MHz
               FM_MAX_MHZ * 100,                 // 10800  → 108.00 MHz
-              10070,                            // 100.70 MHz
-              10);                              // 20×10 kHz = 200 kHz 步进
+              FM_MAX_MHZ * 100,                 // 10800  → 108.00 MHz (修复溢出)
+              10);                              // 10×10 kHz = 100 kHz 步进
   radio.setSeekFmSpacing(10);                   // 同理，搜台网格也改成 10
-  radio.setSeekFmSNRThreshold(SNR_THRESHOLD);   // ✔ 正确命名 :contentReference[oaicite:2]{index=2}
-  radio.setSeekFmRssiThreshold(RSSI_THRESHOLD); // ✔ 正确命名 :contentReference[oaicite:3]{index=3}
+  radio.setSeekFmSNRThreshold(SNR_THRESHOLD);   // ✔ 正确命名
+  radio.setSeekFmRssiThreshold(RSSI_THRESHOLD); // ✔ 正确命名
 
   radio.setVolume(30);
 }
@@ -110,9 +110,17 @@ void loop()
     radio.setVolume(calcVolume(mean));
 
     /* ---------- 调试输出 ---------- */
-    Serial.printf("%s  %7.2f kHz  RSSI=%u dBµ  SNR=%u dB  Vol=%u  Var=%lu\n",
-                  mode.c_str(),
-                  radio.getFrequency() / 10.0,
-                  rssi, snr, radio.getVolume(), variance);
+    if (scanningFM)
+    { // FM：10 kHz 单位→ MHz
+      Serial.printf("FM  %6.2f MHz  RSSI=%u dBµ  SNR=%u dB  Vol=%u  Var=%lu\n",
+                    radio.getFrequency() / 100.0, // ÷100 → MHz
+                    rssi, snr, radio.getVolume(), variance);
+    }
+    else
+    { // AM：已是 1 kHz 单位
+      Serial.printf("AM  %6u kHz  RSSI=%u dBµ  SNR=%u dB  Vol=%u  Var=%lu\n",
+                    radio.getFrequency(),
+                    rssi, snr, radio.getVolume(), variance);
+    }
   }
 }

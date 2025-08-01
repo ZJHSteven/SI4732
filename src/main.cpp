@@ -47,7 +47,7 @@ void setup()
 
   /* 3. 配置 FM 波段
    *    单位 = 10 kHz；6400=64 MHz，10800=108 MHz  */
-  radio.setFM(6400, 10800, 10800, 10); // 从 108 MHz 起步
+  radio.setFM(6400, 10800, 8800, 10);  // 从 88 MHz 起步
   radio.setSeekFmSpacing(10);          // 100 kHz 网格
 
   radio.setSeekFmRssiThreshold(10);    // dBµV，阈值可放宽

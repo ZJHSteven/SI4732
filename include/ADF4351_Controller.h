@@ -1,73 +1,25 @@
-#ifndef ADF4351_CONTROLLER_H
-#define ADF4351_CONTROLLER_H
-
+#pragma once
 #include <Arduino.h>
 
-/* ═══════════════════════ ADF4351控制器模块 ═══════════════════════ */
-class ADF4351_Controller
-{
-private:
-  uint8_t le_pin;
-  uint8_t ce_pin;
-  uint8_t ld_pin;
-  uint8_t sck_pin;
-  uint8_t mosi_pin;
-  
-  uint32_t ref_freq;
-  uint32_t if_freq;
-  uint16_t r_div;
-  uint32_t pfd_freq;
-  
-  uint32_t reg[6]; // R5…R0（reg[5] == R5）
-  uint32_t current_rf_freq; // 当前射频频率
-  
-  // 写 32 bit 到 ADF4351（MSB first bit‑bang）
-  void writeReg(uint32_t data);
+/* ───────────────────────── ① 用户配置区（按需改） ───────────────────────── */
+// 参考时钟 & 中频
+constexpr uint32_t REF_Hz = 50000000UL; // 板载 50 MHz 晶振
+constexpr uint32_t IF_Hz = 10700000UL;  // 中频 10.7 MHz（SA602）
 
-public:
-  // 构造函数 - 传入引脚配置和频率参数
-  ADF4351_Controller(uint8_t le, uint8_t ce, uint8_t ld, uint8_t sck, uint8_t mosi,
-                     uint32_t ref_hz = 50000000UL, uint32_t if_hz = 10700000UL, uint16_t r_divider = 1);
-  
-  // 初始化ADF4351
-  void init();
-  
-  // 设定射频频率 (Hz) - 自动计算本振频率
-  bool setRfFrequency(uint32_t rf_freq_hz);
-  
-  // 直接设定本振频率 (Hz)
-  bool setLoFrequency(uint32_t lo_freq_hz);
-  
-  // 输出使能
-  void enable();
-  
-  // 输出禁用
-  void disable();
-  
-  // 锁定检测
-  bool isLocked();
-  
-  // 获取当前射频频率
-  uint32_t getCurrentRfFrequency() const { return current_rf_freq; }
-  
-  // 获取当前本振频率
-  uint32_t getCurrentLoFrequency() const { return (current_rf_freq > if_freq) ? (current_rf_freq - if_freq) : 0; }
-  
-  // 获取中频
-  uint32_t getIfFrequency() const { return if_freq; }
-  
-  // 打印状态信息（调试用）
-  void printStatus();
-  
-  // 等待锁定，返回锁定状态
-  bool waitForLock(uint16_t timeout_ms = 100);
-  
-  // 静默模式控制（减少串口输出）
-  void setSilentMode(bool silent);
-  bool getSilentMode() const { return silent_mode; }
+// ESP32 ↔ ADF4351 引脚映射
+constexpr uint8_t ADF_LE = 5;    // SPI-CS / LE
+constexpr uint8_t ADF_SCK = 18;  // SPI-CLK
+constexpr uint8_t ADF_MOSI = 23; // SPI-MOSI
+constexpr uint8_t ADF_CE = 32;   // PLL_CE
+constexpr uint8_t ADF_LD = 33;   // PLL_LD（数字锁定指示，高=锁定）
 
-private:
-  bool silent_mode = false; // 静默模式标志
-};
+// ADF4351 R 分频器（寄存器当前写死为 1；如需修改，请同时更新 .cpp 中 R2_BASE）
+constexpr uint16_t R_DIV = 1;
 
-#endif // ADF4351_CONTROLLER_H
+/* ───────────────────────── ② 单函数接口 ─────────────────────────
+ * 设置 ADF4351 输出：根据传入射频 RF（Hz），按低变频方式计算 LO=RF-IF 并配置芯片。
+ * 成功返回：当前 LO 频率（Hz）
+ * 失败返回：0
+ * 本函数会在串口打印一行 "[ADF4351] RF=xxxMHz -> LO=xxxMHz : LOCK/UNLOCK"
+ */
+uint32_t ADF4351_setRF(uint32_t rf_hz);

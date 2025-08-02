@@ -1,204 +1,140 @@
 #include "ADF4351_Controller.h"
 
-/* ========================= ADF4351控制器实现 ========================= */
+/* ───────────────────── 内部常量与工具 ───────────────────── */
+static constexpr uint32_t LO_MIN_Hz = 35000000UL;    // 35 MHz（芯片下限）
+static constexpr uint64_t VCO_MIN_Hz = 2200000000ULL; // 2.2 GHz
+static constexpr uint64_t VCO_MAX_Hz = 4400000000ULL; // 4.4 GHz
+static constexpr uint16_t MOD = 4095;                // 12bit 分数模数
 
-ADF4351_Controller::ADF4351_Controller(uint8_t le, uint8_t ce, uint8_t ld, uint8_t sck, uint8_t mosi,
-                                       uint32_t ref_hz, uint32_t if_hz, uint16_t r_divider)
-    : le_pin(le), ce_pin(ce), ld_pin(ld), sck_pin(sck), mosi_pin(mosi),
-      ref_freq(ref_hz), if_freq(if_hz), r_div(r_divider), current_rf_freq(0)
-{
-  pfd_freq = ref_freq / r_div; // 鉴相频率
-  
-  /* 默认寄存器值 ‑ 依据数据手册 + 常用配置
-     ‑ Digital Lock Detect
-     ‑ 输出功率 +5 dBm / RF_OUT_EN=1 / MTLD=0
-     ‑ 充电泵极性负向（环路常用，若板子做成正向请把 reg[2] 改 0x0E008E62）
-  */
-  reg[5] = 0x00580005; // R5
-  reg[4] = 0x008C703C; // R4  (+5 dBm，RF_OUT_EN=1，MTLD=0)
-  reg[3] = 0x00C804B3; // R3  BS_CLK_DIV = 400 (50 MHz / 125 kHz)
-  reg[2] = 0x0E008E42; // R2  PD_POL=0, CP=2.5 mA
-  reg[1] = 0x80008001; // R1  Phase=1, MOD 占位
-  reg[0] = 0x00800000; // R0  INT/FRAC 占位
-}
+// 寄存器默认值（按你给的常用配置；R4 的 RF_DIV_SEL 会在运行时改）
+static constexpr uint32_t R5_BASE = 0x00580005;
+static constexpr uint32_t R4_BASE = 0x008C703C; // +5 dBm, RF_OUT_EN=1, MTLD=0
+static constexpr uint32_t R3_BASE = 0x00C804B3; // Band Select clk div 等
+static constexpr uint32_t R2_BASE = 0x0E008E42; // 负向极性、CP≈2.5mA、R计数器=1（配合 R_DIV=1）
+static constexpr uint32_t R1_BASE = 0x80008001; // 仅作占位；实际会重写 MOD/PHASE
+// R0 在运行时写 INT/FRAC
 
-void ADF4351_Controller::writeReg(uint32_t data)
+// 手动 SPI：上升沿采样，LE 包裹 32bit
+static inline void adf_send32(uint32_t w)
 {
-  digitalWrite(le_pin, LOW);
+  digitalWrite(ADF_LE, LOW);
   delayMicroseconds(1);
   for (int i = 31; i >= 0; --i)
   {
-    digitalWrite(sck_pin, LOW);
-    digitalWrite(mosi_pin, (data >> i) & 1);
+    digitalWrite(ADF_SCK, LOW);
+    digitalWrite(ADF_MOSI, (w >> i) & 1);
     delayMicroseconds(1);
-    digitalWrite(sck_pin, HIGH);
+    digitalWrite(ADF_SCK, HIGH);
     delayMicroseconds(1);
   }
-  digitalWrite(le_pin, HIGH);
+  digitalWrite(ADF_LE, HIGH);
   delayMicroseconds(1);
-  digitalWrite(le_pin, LOW);
+  digitalWrite(ADF_LE, LOW);
 }
 
-void ADF4351_Controller::init()
+// 一次性、惰性初始化引脚（首次调用 setRF 时执行）
+static void adf_lazy_init()
 {
-  pinMode(le_pin, OUTPUT);
-  pinMode(ce_pin, OUTPUT);
-  pinMode(ld_pin, INPUT_PULLUP);
-  pinMode(sck_pin, OUTPUT);
-  pinMode(mosi_pin, OUTPUT);
-  
-  digitalWrite(le_pin, LOW);
-  digitalWrite(ce_pin, HIGH); // 使能芯片
-  delay(10);
-  
-  // R5→R0 顺序写入
-  for (int i = 5; i >= 0; --i)
-  {
-    writeReg(reg[i]);
-    delayMicroseconds(200);
-  }
-  delay(10);
-  
-  Serial.println("ADF4351 控制器初始化完成");
-  Serial.printf("参考频率: %.1f MHz\n", ref_freq / 1e6);
-  Serial.printf("中频: %.1f MHz\n", if_freq / 1e6);
-  Serial.printf("鉴相频率: %.1f MHz\n", pfd_freq / 1e6);
+  static bool inited = false;
+  if (inited)
+    return;
+  pinMode(ADF_LE, OUTPUT);
+  pinMode(ADF_SCK, OUTPUT);
+  pinMode(ADF_MOSI, OUTPUT);
+  pinMode(ADF_CE, OUTPUT);
+  pinMode(ADF_LD, INPUT_PULLUP);
+
+  digitalWrite(ADF_LE, LOW);
+  digitalWrite(ADF_SCK, LOW);
+  digitalWrite(ADF_MOSI, LOW);
+  digitalWrite(ADF_CE, HIGH); // 使能芯片
+  delay(5);
+
+  // 上电初始化：R5→R0
+  adf_send32(R5_BASE);
+  adf_send32(R4_BASE);
+  adf_send32(R3_BASE);
+  adf_send32(R2_BASE);
+  adf_send32(R1_BASE);
+  adf_send32(0x00800000); // R0 占位
+  delay(5);
+
+  inited = true;
 }
 
-bool ADF4351_Controller::setRfFrequency(uint32_t rf_freq_hz)
+/* ─────────────────────── 单函数实现 ─────────────────────── */
+uint32_t ADF4351_setRF(uint32_t rf_hz)
 {
-  current_rf_freq = rf_freq_hz;
-  
-  // 计算本振频率：LO = RF - IF (低变频)
-  uint32_t lo_freq = (rf_freq_hz > if_freq) ? (rf_freq_hz - if_freq) : 35000000UL;
-  
-  if (lo_freq < 35000000UL)
-  {
-    lo_freq = 35000000UL;
-    Serial.printf("警告: 本振频率过低，设置为最小值 35 MHz\n");
-  }
-  
-  return setLoFrequency(lo_freq);
-}
+  adf_lazy_init();
 
-bool ADF4351_Controller::setLoFrequency(uint32_t lo_freq_hz)
-{
-  if (lo_freq_hz < 35000000UL || lo_freq_hz > 4400000000UL)
+  // 低变频：LO = RF - IF
+  if (rf_hz <= IF_Hz)
   {
-    Serial.printf("错误: 本振频率 %.3f MHz 超出 35 MHz–4.4 GHz 范围\n", lo_freq_hz / 1e6);
-    return false;
+    Serial.println("[ADF4351] 参数错误：RF <= IF");
+    return 0;
+  }
+  uint32_t lo = rf_hz - IF_Hz;
+  if (lo < LO_MIN_Hz || (uint64_t)lo > VCO_MAX_Hz)
+  {
+    Serial.println("[ADF4351] LO 超出范围 (35 MHz ~ 4.4 GHz)");
+    return 0;
   }
 
-  /* 计算 VCO 频率 & RF_DIV_SEL */
+  // 将 LO 折算到 VCO 范围，并求 RF_DIV_SEL
   uint8_t rf_div_sel = 0;
-  uint32_t vco_freq = lo_freq_hz;
-  while (vco_freq < 2200000000UL && rf_div_sel < 6)
+  uint64_t vco = lo;
+  while (vco < VCO_MIN_Hz && rf_div_sel < 6)
   {
-    vco_freq <<= 1; // ×2
+    vco <<= 1; // ×2
     ++rf_div_sel;
   }
-  if (vco_freq > 4400000000UL)
+  if (vco > VCO_MAX_Hz)
   {
-    Serial.println("错误: VCO 频率超限");
-    return false;
+    Serial.println("[ADF4351] VCO 超限");
+    return 0;
   }
 
-  /* 计算 INT / FRAC / MOD */
-  const uint16_t MOD = 4095;
-  uint16_t INT = vco_freq / pfd_freq;
-  uint32_t remainder = vco_freq % pfd_freq;
-  uint16_t FRAC = (remainder == 0) ? 0 : (uint16_t)(((uint64_t)remainder * MOD) / pfd_freq); // 64 bit 乘法防溢出
-
-  if (INT < 23 || INT > 65535)
+  // 计算 INT/FRAC（四舍五入）
+  const uint32_t PFD = (R_DIV == 0) ? 1u : (REF_Hz / R_DIV); // 保护
+  if (PFD == 0)
   {
-    Serial.println("错误: INT 超范围");
-    return false;
+    Serial.println("[ADF4351] PFD=0（请检查 REF_Hz / R_DIV）");
+    return 0;
+  }
+  uint32_t INT = static_cast<uint32_t>(vco / PFD);
+  uint32_t rem = static_cast<uint32_t>(vco % PFD);
+  uint32_t FRAC = (uint32_t)(((uint64_t)rem * MOD + (PFD / 2)) / PFD);
+
+  // 边界检查（ADF4351 要求 INT ≥ 23）
+  if (INT < 23 || INT > 65535 || FRAC > 4095)
+  {
+    Serial.println("[ADF4351] INT/FRAC 非法");
+    return 0;
   }
 
-  /* 构建寄存器 */
-  reg[0] = ((uint32_t)INT << 15) | ((uint32_t)FRAC << 3);
-  reg[1] = (1UL << 15) | ((uint32_t)MOD << 3) | 0x1;
-  reg[4] = (reg[4] & 0xFF8FFFFF) | ((uint32_t)rf_div_sel << 20);
+  // 组帧寄存器
+  uint32_t r5 = R5_BASE;
+  uint32_t r4 = (R4_BASE & 0xFF8FFFFF) | ((uint32_t)(rf_div_sel & 0x7) << 20); // RF_DIV_SEL
+  uint32_t r3 = R3_BASE;
+  uint32_t r2 = R2_BASE;                                               // 注意：这里假定 R 计数器=1。如需使用 R_DIV≠1，请同步修改 R2_BASE。
+  uint32_t r1 = (1UL << 15) | ((MOD & 0x0FFF) << 3) | 0x1;             // PHASE=1, MOD=4095, Addr=1
+  uint32_t r0 = ((INT & 0xFFFF) << 15) | ((FRAC & 0x0FFF) << 3) | 0x0; // Addr=0
 
-  /* 写入 R5→R0 */
-  writeReg(reg[5]);
-  writeReg(reg[4]);
-  writeReg(reg[3]);
-  writeReg(reg[2]);
-  writeReg(reg[1]);
-  writeReg(reg[0]);
+  // 写入 R5→R0
+  adf_send32(r5);
+  adf_send32(r4);
+  adf_send32(r3);
+  adf_send32(r2);
+  adf_send32(r1);
+  adf_send32(r0);
   delayMicroseconds(300);
 
-  if (!silent_mode) {
-    Serial.printf("PLL参数: VCO=%.3f MHz, INT=%u, FRAC=%u, MOD=%u, RF_DIV=%u\n",
-                  vco_freq / 1e6, INT, FRAC, MOD, 1u << rf_div_sel);
-    Serial.printf("设置: RF=%.3f MHz → LO=%.3f MHz\n", 
-                  current_rf_freq / 1e6, lo_freq_hz / 1e6);
-  }
-  return true;
-}
+  // 简单锁定检测（最多 ~5ms）
+  bool locked = digitalRead(ADF_LD); // 立即读 LD
+  delayMicroseconds(1000);           // 喂狗 / 给环路极短时间（可调 0~1000us）
 
-void ADF4351_Controller::enable()
-{
-  writeReg(reg[4]); // R4 里已包含 RF_OUT_EN=1 / +5 dBm / MTLD=0
-}
+  Serial.printf("[ADF4351] RF=%.3f MHz -> LO=%.3f MHz : %s\n",
+                rf_hz / 1e6, lo / 1e6, locked ? "LOCK" : "UNLOCK");
 
-void ADF4351_Controller::disable()
-{
-  uint32_t temp_r4 = reg[4] & 0xFFFFFFDF; // 清除 RF_OUT_EN 位 (bit 5)
-  writeReg(temp_r4);
-}
-
-bool ADF4351_Controller::isLocked()
-{
-  return digitalRead(ld_pin); // Digital LD: 高电平 = 锁定
-}
-
-bool ADF4351_Controller::waitForLock(uint16_t timeout_ms)
-{
-  for (uint16_t i = 0; i < timeout_ms; ++i)
-  {
-    if (isLocked())
-    {
-      if (!silent_mode) {
-        Serial.printf("✓ PLL锁定成功 (%d ms)\n", i + 1);
-      }
-      return true;
-    }
-    delay(1);
-  }
-  if (!silent_mode) {
-    Serial.printf("✗ PLL锁定超时 (%d ms)\n", timeout_ms);
-  }
-  return false;
-}
-
-void ADF4351_Controller::setSilentMode(bool silent)
-{
-  silent_mode = silent;
-}
-
-void ADF4351_Controller::printStatus()
-{
-  Serial.printf("\n=== ADF4351 状态信息 ===\n");
-  Serial.printf("射频频率: %.3f MHz\n", current_rf_freq / 1e6);
-  Serial.printf("本振频率: %.3f MHz\n", getCurrentLoFrequency() / 1e6);
-  Serial.printf("中频: %.3f MHz\n", if_freq / 1e6);
-  Serial.printf("参考频率: %.3f MHz\n", ref_freq / 1e6);
-  Serial.printf("鉴相频率: %.3f MHz\n", pfd_freq / 1e6);
-  Serial.printf("锁定状态: %s (LD=%d)\n", isLocked() ? "已锁定" : "未锁定", digitalRead(ld_pin));
-  
-  uint16_t INT = (reg[0] >> 15) & 0xFFFF;
-  uint16_t FRAC = (reg[0] >> 3) & 0xFFF;
-  uint16_t MOD = (reg[1] >> 3) & 0xFFF;
-  uint8_t rf_d = (reg[4] >> 20) & 0x7;
-  Serial.printf("PLL参数: INT=%u, FRAC=%u, MOD=%u, RF_DIV=2^%u\n", INT, FRAC, MOD, rf_d);
-  
-  uint64_t vco = (uint64_t)INT * pfd_freq + ((uint64_t)FRAC * pfd_freq) / MOD;
-  Serial.printf("VCO=%.6f MHz, 输出=%.6f MHz\n", vco / 1e6, (double)vco / (1UL << rf_d) / 1e6);
-  
-  Serial.println("寄存器值:");
-  for (int i = 5; i >= 0; --i)
-    Serial.printf("  R%d: 0x%08X\n", i, reg[i]);
-  Serial.println("========================\n");
+  return locked ? lo : 0;
 }

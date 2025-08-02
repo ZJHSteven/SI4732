@@ -1,211 +1,191 @@
 #include <Arduino.h>
-#include <SPI.h>
+#include "ADF4351_Controller.h"
 
-/* ───────────────────────── ① 用户可改区 ───────────────────────── */
+/* ───────────────────────── ① 用户配置区 ───────────────────────── */
 // --- 参考时钟 & 中频 ---
-constexpr uint32_t REF_Hz = 50000000UL; // 板载 50 MHz 晶振
-constexpr uint32_t IF_Hz = 10700000UL;  // 中频 10.7 MHz（SA602）
+constexpr uint32_t REF_Hz = 50000000UL; // 板载 50 MHz 晶振
+constexpr uint32_t IF_Hz = 10700000UL;  // 中频 10.7 MHz（SA602）
 
 // --- ESP32 ↔ ADF4351 引脚映射 ---
 constexpr uint8_t ADF_LE = 5;    // SPI‑CS / LE
 constexpr uint8_t ADF_SCK = 18;  // SPI‑CLK
 constexpr uint8_t ADF_MOSI = 23; // SPI‑MOSI
-constexpr int8_t ADF_MISO = -1;  // SPI‑MISO 不用
 constexpr uint8_t ADF_CE = 32;   // PLL_CE
-constexpr uint8_t ADF_LD = 33;   // PLL_LD (可选)
+constexpr uint8_t ADF_LD = 33;   // PLL_LD
 
 // --- ADF4351 PLL 参数 ---
-constexpr uint16_t R_DIV = 1;                 // R 分频器
-constexpr uint32_t PFD_FREQ = REF_Hz / R_DIV; // 鉴相频率 50 MHz
+constexpr uint16_t R_DIV = 1; // R 分频器
+
+// --- 可变射频频率 - 这个值可以在运行时动态修改 ---
+uint32_t rfHz = 108000000UL; // 当前射频频率，默认108MHz (FM)
+
+// --- 其他应用模块变量 ---
+bool frequency_changed = false; // 频率改变标志
+unsigned long last_update = 0; // 上次更新时间
 // ───────────────────────────────────────────────────────────────── */
 
-/* ========================= ADF4351 手动控制类 ========================= */
-class ADF4351_Manual
+/* ========================= 模块实例化 ========================= */
+ADF4351_Controller adf_controller(ADF_LE, ADF_CE, ADF_LD, ADF_SCK, ADF_MOSI, REF_Hz, IF_Hz, R_DIV);
+
+/* ========================= 频率控制函数 ========================= */
+// 设置射频频率（可从其他模块调用）
+bool setRfFrequency(uint32_t new_rf_hz)
 {
-private:
-  uint8_t le_pin;
-  uint32_t reg[6]; // R5…R0（reg[5] == R5）
-
-  // 写 32 bit 到 ADF4351（MSB first bit‑bang）
-  void writeReg(uint32_t data)
+  if (new_rf_hz != rfHz)
   {
-    digitalWrite(le_pin, LOW);
-    delayMicroseconds(1);
-    for (int i = 31; i >= 0; --i)
-    {
-      digitalWrite(ADF_SCK, LOW);
-      digitalWrite(ADF_MOSI, (data >> i) & 1);
-      delayMicroseconds(1);
-      digitalWrite(ADF_SCK, HIGH);
-      delayMicroseconds(1);
-    }
-    digitalWrite(le_pin, HIGH);
-    delayMicroseconds(1);
-    digitalWrite(le_pin, LOW);
-  }
-
-public:
-  explicit ADF4351_Manual(uint8_t le) : le_pin(le)
-  {
-    /* 默认寄存器值 ‑ 依据数据手册 + 常用配置
-       ‑ Digital Lock Detect
-       ‑ 输出功率 +5 dBm / RF_OUT_EN=1 / MTLD=0
-       ‑ 充电泵极性负向（环路常用，若板子做成正向请把 reg[2] 改 0x0E008E62）
-    */
-    reg[5] = 0x00580005; // R5
-    reg[4] = 0x008C703C; // R4  (+5 dBm，RF_OUT_EN=1，MTLD=0)
-    reg[3] = 0x00C804B3; // R3  BS_CLK_DIV = 400 (50 MHz / 125 kHz)
-    reg[2] = 0x0E008E42; // R2  PD_POL=0, CP=2.5 mA
-    reg[1] = 0x80008001; // R1  Phase=1, MOD 占位
-    reg[0] = 0x00800000; // R0  INT/FRAC 占位
-  }
-
-  void init()
-  {
-    pinMode(le_pin, OUTPUT);
-    pinMode(ADF_SCK, OUTPUT);
-    pinMode(ADF_MOSI, OUTPUT);
-    digitalWrite(le_pin, LOW);
-    delay(10);
-    // R5→R0 顺序写入
-    for (int i = 5; i >= 0; --i)
-    {
-      writeReg(reg[i]);
-      delayMicroseconds(200);
-    }
-    delay(10);
-    Serial.println("ADF4351 寄存器初始化完成");
-  }
-
-  /* ---------------- 设定输出频率 (Hz) ---------------- */
-  bool setFrequency(uint32_t fout)
-  {
-    if (fout < 35000000UL || fout > 4400000000UL)
-    {
-      Serial.printf("频率 %.3f MHz 超出 35 MHz–4.4 GHz\n", fout / 1e6);
-      return false;
-    }
-
-    /* 计算 VCO 频率 & RF_DIV_SEL */
-    uint8_t rf_div_sel = 0;
-    uint32_t vco_freq = fout;
-    while (vco_freq < 2200000000UL && rf_div_sel < 6)
-    {
-      vco_freq <<= 1; // ×2
-      ++rf_div_sel;
-    }
-    if (vco_freq > 4400000000UL)
-    {
-      Serial.println("VCO 频率超限");
-      return false;
-    }
-
-    /* 计算 INT / FRAC / MOD */
-    const uint16_t MOD = 4095;
-    uint16_t INT = vco_freq / PFD_FREQ;
-    uint32_t remainder = vco_freq % PFD_FREQ;
-    uint16_t FRAC = (remainder == 0) ? 0 : (uint16_t)(((uint64_t)remainder * MOD) / PFD_FREQ); // 64 bit 乘法防溢出
-
-    if (INT < 23 || INT > 65535)
-    {
-      Serial.println("INT 超范围");
-      return false;
-    }
-
-    /* 构建寄存器 */
-    reg[0] = ((uint32_t)INT << 15) | ((uint32_t)FRAC << 3);
-    reg[1] = (1UL << 15) | ((uint32_t)MOD << 3) | 0x1;
-    reg[4] = (reg[4] & 0xFF8FFFFF) | ((uint32_t)rf_div_sel << 20);
-
-    /* 写入 R5→R0 */
-    writeReg(reg[5]);
-    writeReg(reg[4]);
-    writeReg(reg[3]);
-    writeReg(reg[2]);
-    writeReg(reg[1]);
-    writeReg(reg[0]);
-    delayMicroseconds(300);
-
-    Serial.printf("PLL参数: VCO=%.3f MHz, INT=%u, FRAC=%u, MOD=%u, RF_DIV=%u\n",
-                  vco_freq / 1e6, INT, FRAC, MOD, 1u << rf_div_sel);
+    rfHz = new_rf_hz;
+    frequency_changed = true;
+    Serial.printf("📻 射频频率更改为: %.3f MHz\n", rfHz / 1e6);
     return true;
   }
+  return false;
+}
 
-  /* ---------------- 输出使能 ---------------- */
-  void enable()
+// 获取当前射频频率
+uint32_t getRfFrequency()
+{
+  return rfHz;
+}
+
+// 频率扫描示例函数
+void frequencyScan(uint32_t start_hz, uint32_t end_hz, uint32_t step_hz)
+{
+  Serial.printf("🔍 开始频率扫描: %.1f - %.1f MHz, 步进 %.1f kHz\n", 
+                start_hz / 1e6, end_hz / 1e6, step_hz / 1e3);
+  
+  for (uint32_t freq = start_hz; freq <= end_hz; freq += step_hz)
   {
-    writeReg(reg[4]); // R4 里已包含 RF_OUT_EN=1 / +5 dBm / MTLD=0
+    setRfFrequency(freq);
+    
+    if (adf_controller.setRfFrequency(rfHz))
+    {
+      if (adf_controller.waitForLock(50))
+      {
+        Serial.printf("✓ %.3f MHz - 锁定\n", freq / 1e6);
+      }
+      else
+      {
+        Serial.printf("✗ %.3f MHz - 未锁定\n", freq / 1e6);
+      }
+    }
+    delay(100); // 扫描间隔
   }
+  Serial.println("🔍 频率扫描完成");
+}
 
-  /* ---------------- 锁定检测 ---------------- */
-  bool isLocked()
-  { // Digital LD: 高电平 = 锁定
-    return digitalRead(ADF_LD);
-  }
-
-  /* 可选：打印状态，用于调试 */
-  void printStatus(uint32_t target_freq)
-  {
-    Serial.printf("=== ADF4351 调试信息 ===\n");
-    Serial.printf("目标频率: %.3f MHz\n", target_freq / 1e6);
-    Serial.printf("参考频率: %.3f MHz\n", REF_Hz / 1e6);
-    Serial.printf("鉴相频率: %.3f MHz\n", PFD_FREQ / 1e6);
-    Serial.printf("锁定状态: %s (LD=%d)\n", isLocked() ? "已锁定" : "未锁定", digitalRead(ADF_LD));
-    uint16_t INT = (reg[0] >> 15) & 0xFFFF;
-    uint16_t FRAC = (reg[0] >> 3) & 0xFFF;
-    uint16_t MOD = (reg[1] >> 3) & 0xFFF;
-    uint8_t rf_d = (reg[4] >> 20) & 0x7;
-    Serial.printf("PLL参数: INT=%u, FRAC=%u, MOD=%u, RF_DIV=2^%u\n", INT, FRAC, MOD, rf_d);
-    uint64_t vco = (uint64_t)INT * PFD_FREQ + ((uint64_t)FRAC * PFD_FREQ) / MOD;
-    Serial.printf("VCO=%.6f MHz, 输出=%.6f MHz\n", vco / 1e6, (double)vco / (1UL << rf_d) / 1e6);
-    for (int i = 5; i >= 0; --i)
-      Serial.printf("R%d: 0x%08X\n", i, reg[i]);
-    Serial.println("========================");
-  }
-};
-
-ADF4351_Manual vfo(ADF_LE);
-
-/* ========================= ② 只跑一次 ========================= */
+/* ========================= 主程序初始化 ========================= */
 void setup()
 {
   Serial.begin(115200);
-  pinMode(ADF_CE, OUTPUT);
-  digitalWrite(ADF_CE, HIGH); // 使能芯片
-  pinMode(ADF_LD, INPUT_PULLUP);
-
-  vfo.init();
-  vfo.enable();
-
-  Serial.println("ADF4351 初始化完成");
-  Serial.printf("参考频率: %.1f MHz\n", REF_Hz / 1e6);
-  Serial.printf("中频: %.1f MHz\n", IF_Hz / 1e6);
+  delay(1000);
+  
+  Serial.println("\n=======================================");
+  Serial.println("    SI4732 + ADF4351 控制系统启动");
+  Serial.println("=======================================");
+  
+  // 初始化ADF4351控制器
+  adf_controller.init();
+  adf_controller.enable();
+  
+  // 设置初始频率
+  Serial.printf("🎯 设置初始射频频率: %.3f MHz\n", rfHz / 1e6);
+  if (adf_controller.setRfFrequency(rfHz))
+  {
+    adf_controller.waitForLock(100);
+    adf_controller.printStatus();
+  }
+  
+  Serial.println("\n✅ 系统初始化完成");
+  Serial.println("📝 在loop()中可以动态修改 rfHz 变量来改变频率");
+  Serial.println("📝 或调用 setRfFrequency() 函数");
+  
+  last_update = millis();
 }
 
-/* ================ ③ 持续循环，可实时改频 ================= */
+/* ========================= 主循环 ========================= */
 void loop()
 {
-  uint32_t rfHz = 108000000UL;  // TODO: 换成实时射频读数
-  uint32_t loHz = rfHz - IF_Hz; // 低变频：LO = RF – IF
-  if (loHz < 35000000UL)
-    loHz = 35000000UL;
-
-  if (vfo.setFrequency(loHz))
+  unsigned long current_time = millis();
+  
+  // 检查频率是否需要更新（每秒检查一次或频率改变时）
+  if (frequency_changed || (current_time - last_update >= 1000))
   {
-    // 等待锁定，最多 100 ms
-    for (int i = 0; i < 100; ++i)
+    if (frequency_changed)
     {
-      if (vfo.isLocked())
+      Serial.printf("🔄 应用频率更改: %.3f MHz\n", rfHz / 1e6);
+      
+      if (adf_controller.setRfFrequency(rfHz))
       {
-        Serial.printf("✓ RF=%.1f MHz → LO=%.3f MHz (已锁定, %d ms)\n", rfHz / 1e6, loHz / 1e6, i + 1);
-        break;
+        if (adf_controller.waitForLock(100))
+        {
+          Serial.printf("✅ 频率设置成功: RF=%.3f MHz, LO=%.3f MHz\n", 
+                        rfHz / 1e6, adf_controller.getCurrentLoFrequency() / 1e6);
+        }
+        else
+        {
+          Serial.printf("⚠️  PLL未锁定，请检查频率设置\n");
+        }
       }
-      delay(1);
+      frequency_changed = false;
+    }
+    
+    last_update = current_time;
+  }
+  
+  // ═══════════════════════════════════════════════════════════════
+  // 🔥 在这里添加你的其他应用代码（SI4732控制等）
+  // ═══════════════════════════════════════════════════════════════
+  
+  // 示例：简单的频率变化演示（每5秒切换频率）
+  static unsigned long demo_timer = 0;
+  static uint8_t demo_freq_index = 0;
+  static uint32_t demo_frequencies[] = {
+    108000000UL,  // 108.0 MHz FM
+    101500000UL,  // 101.5 MHz FM  
+    95300000UL,   // 95.3 MHz FM
+    88100000UL    // 88.1 MHz FM
+  };
+  
+  if (current_time - demo_timer >= 5000) // 每5秒切换
+  {
+    demo_freq_index = (demo_freq_index + 1) % 4;
+    setRfFrequency(demo_frequencies[demo_freq_index]);
+    demo_timer = current_time;
+  }
+  
+  // 检查串口命令（可选）
+  if (Serial.available())
+  {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    
+    if (command.startsWith("freq "))
+    {
+      float freq_mhz = command.substring(5).toFloat();
+      if (freq_mhz > 0)
+      {
+        uint32_t freq_hz = (uint32_t)(freq_mhz * 1e6);
+        setRfFrequency(freq_hz);
+      }
+    }
+    else if (command == "status")
+    {
+      adf_controller.printStatus();
+    }
+    else if (command == "scan")
+    {
+      // FM波段扫描示例：88-108 MHz
+      frequencyScan(88000000UL, 108000000UL, 200000UL); // 200kHz步进
+    }
+    else if (command == "help")
+    {
+      Serial.println("\n📖 可用命令:");
+      Serial.println("  freq <MHz>  - 设置射频频率，例如: freq 101.5");
+      Serial.println("  status      - 显示当前状态");
+      Serial.println("  scan        - FM波段扫描 (88-108 MHz)");
+      Serial.println("  help        - 显示此帮助");
     }
   }
-  else
-  {
-    Serial.printf("✗ LO=%.3f MHz 设定失败\n", loHz / 1e6);
-  }
-  delay(1000);
+  
+  delay(10); // 主循环延时
 }

@@ -191,8 +191,8 @@ void analyzeFMStationsWithAM()
                      found_stations[i].rssi, found_stations[i].snr);
         Serial.printf("AM解调: RSSI=%d dBµV, SNR=%d dB\n", am_rssi, am_snr);
         
-        // 简单的AM检测逻辑：如果AM解调后还有一定信号，可能包含AM调制
-        if (am_rssi > 15 && am_snr > 3) {
+        // 简单的AM检测逻辑：RSSI优先，如果RSSI足够强或者有一定信号质量，可能包含AM调制
+        if (am_rssi > 12 || (am_rssi > 8 && am_snr > 2)) {
             Serial.println("🔍 可能检测到AM调制成分!");
         } else {
             Serial.println("📻 纯FM信号");
@@ -647,7 +647,7 @@ static uint32_t adf_scan_start_freq = 88000000UL;  // 88MHz
 static uint32_t adf_scan_end_freq = 108000000UL;   // 108MHz
 static uint32_t adf_scan_step = 100000UL;          // 100kHz
 static uint32_t adf_current_scan_freq = 88000000UL;
-static unsigned long adf_scan_interval = 15;       // 15ms
+static unsigned long adf_scan_interval = 1;        // 1ms - 快速扫频
 static bool adf_scan_direction = true;             // true=向上，false=向下
 static uint32_t adf_scan_count = 0;
 

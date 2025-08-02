@@ -14,6 +14,7 @@ SI4732_Scanner::SI4732_Scanner(uint8_t rst_pin, uint8_t sda_pin, uint8_t scl_pin
     current_freq = 0;
     band_start = 8800;
     band_end = 10800;
+    filter_count = 0; // 初始化过滤计数器
 }
 
 bool SI4732_Scanner::init()
@@ -56,10 +57,10 @@ bool SI4732_Scanner::setFMMode(uint16_t band_start, uint16_t band_end, uint16_t 
     // 设置FM波段
     radio.setFM(band_start, band_end, freq_init, freq_step);
     
-    // 配置SEEK参数 - 优化搜台灵敏度和覆盖范围
+    // 配置SEEK参数 - 以RSSI为主要判断标准，SNR为辅助
     radio.setProperty(0x1402 /*FM_SEEK_FREQ_SPACING*/, 10);        // 100kHz步进
-    radio.setProperty(0x1403 /*FM_SEEK_TUNE_SNR_THRESHOLD*/, 2);   // 降低SNR阈值到2dB
-    radio.setProperty(0x1404 /*FM_SEEK_TUNE_RSSI_THRESHOLD*/, 15); // 降低RSSI阈值到15dBµV
+    radio.setProperty(0x1404 /*FM_SEEK_TUNE_RSSI_THRESHOLD*/, 12); // 降低RSSI阈值到12dBµV (主要判断)
+    radio.setProperty(0x1403 /*FM_SEEK_TUNE_SNR_THRESHOLD*/, 1);   // 进一步降低SNR阈值到1dB (辅助判断)
     radio.setProperty(0x1108 /*FM_MAX_TUNE_ERROR*/, 75);           // 增大频偏容忍到±75kHz
     
     current_freq = freq_init;
@@ -167,6 +168,29 @@ uint16_t SI4732_Scanner::seekStations(StationInfo* stations, uint16_t max_statio
         station_count = manualScan(stations, max_stations);
     }
     
+    // 按RSSI排序电台列表
+    if (station_count > 1) {
+        sortStationsByRSSI(stations, station_count);
+    }
+    
+    // 应用频率过滤（如果有设置）
+    if (filter_count > 0 && station_count > 0) {
+        // 创建临时数组来存储过滤后的结果
+        StationInfo* temp_stations = new StationInfo[station_count];
+        if (temp_stations) {
+            // 复制原始数据到临时数组
+            for (uint16_t i = 0; i < station_count; i++) {
+                temp_stations[i] = stations[i];
+            }
+            
+            // 过滤电台
+            station_count = filterStations(temp_stations, station_count, stations, max_stations);
+            
+            // 释放临时数组
+            delete[] temp_stations;
+        }
+    }
+    
     debugPrint("✅ 扫描完成，找到 %d 个电台", station_count);
     return station_count;
 }
@@ -242,8 +266,8 @@ void SI4732_Scanner::updateSignalQuality()
 
 bool SI4732_Scanner::isStationValid()
 {
-    // 简单的电台有效性判断：RSSI > 25 且 SNR > 5
-    return (current_rssi > 25 && current_snr > 5);
+    // 简单的电台有效性判断：RSSI优先，RSSI > 20 或者 (RSSI > 15 且 SNR > 3)
+    return (current_rssi > 16 || (current_rssi > 15 && current_snr > 3));
 }
 
 void SI4732_Scanner::setVolume(uint8_t volume)
@@ -347,8 +371,8 @@ uint16_t SI4732_Scanner::manualScan(StationInfo* stations, uint16_t max_stations
         // 获取信号质量
         updateSignalQuality();
         
-        // 简单的信号检测：RSSI > 25 且 SNR > 8
-        if (current_rssi > 25 && current_snr > 8) {
+        // 简单的信号检测：RSSI优先，RSSI > 20 或者 (RSSI > 15 且 SNR > 5)
+        if (current_rssi > 20 || (current_rssi > 15 && current_snr > 5)) {
             stations[station_count].frequency = freq;
             stations[station_count].rssi = current_rssi;
             stations[station_count].snr = current_snr;
@@ -364,6 +388,138 @@ uint16_t SI4732_Scanner::manualScan(StationInfo* stations, uint16_t max_stations
         }
     }
     
+    // 手动扫描结果也要按RSSI排序
+    if (station_count > 1) {
+        sortStationsByRSSI(stations, station_count);
+    }
+    
     debugPrint("✅ 手动扫描完成，找到 %d 个电台", station_count);
     return station_count;
+}
+
+// 按RSSI排序电台列表 - 使用简单的冒泡排序，RSSI高的在前
+void SI4732_Scanner::sortStationsByRSSI(StationInfo* stations, uint16_t count)
+{
+    if (!stations || count <= 1) return;
+    
+    debugPrint("🔄 按RSSI排序电台列表...");
+    
+    // 冒泡排序，RSSI从高到低
+    for (uint16_t i = 0; i < count - 1; i++) {
+        for (uint16_t j = 0; j < count - 1 - i; j++) {
+            // 比较RSSI，如果当前项的RSSI小于下一项，则交换
+            if (stations[j].rssi < stations[j + 1].rssi) {
+                // 交换结构体
+                StationInfo temp = stations[j];
+                stations[j] = stations[j + 1];
+                stations[j + 1] = temp;
+            }
+        }
+    }
+    
+    debugPrint("✅ 电台列表已按RSSI排序完成 (强信号在前)");
+}
+
+// 设置频率过滤列表
+void SI4732_Scanner::setFrequencyFilter(uint16_t* filter_list, uint16_t filter_count_input)
+{
+    if (!filter_list || filter_count_input == 0) {
+        clearFrequencyFilter();
+        return;
+    }
+    
+    // 限制过滤频率数量
+    filter_count = (filter_count_input > MAX_FILTER_FREQ) ? MAX_FILTER_FREQ : filter_count_input;
+    
+    // 复制过滤频率列表
+    for (uint16_t i = 0; i < filter_count; i++) {
+        filter_frequencies[i] = filter_list[i];
+    }
+    
+    debugPrint("🚫 设置频率过滤，共%d个频率将被过滤", filter_count);
+}
+
+// 设置默认频率过滤列表（基于用户提供的频率列表）
+void SI4732_Scanner::setDefaultFrequencyFilter()
+{
+    // 用户提供的需要过滤的频率列表（单位：10kHz）
+    uint16_t default_filter_list[] = {
+        // 第一批过滤频率
+        8860,  // 88.60 MHz
+        10460, // 104.60 MHz
+        9900,  // 99.00 MHz
+        8780,  // 87.80 MHz
+        8790,  // 87.90 MHz
+        8870,  // 88.70 MHz
+        9890,  // 98.90 MHz
+        9880,  // 98.80 MHz
+        9920,  // 99.20 MHz
+        8760,  // 87.60 MHz
+        9010,  // 90.10 MHz
+        10420, // 104.20 MHz
+        9740,  // 97.40 MHz
+        10790, // 107.90 MHz
+        10330, // 103.30 MHz
+        8990,  // 89.90 MHz
+        
+        // 第二批新增过滤频率
+        8850,  // 88.50 MHz
+        9910,  // 99.10 MHz  
+        8830   // 88.30 MHz
+        // 注意：88.60MHz和87.80MHz已在第一批中
+    };
+    
+    uint16_t list_size = sizeof(default_filter_list) / sizeof(default_filter_list[0]);
+    setFrequencyFilter(default_filter_list, list_size);
+    
+    debugPrint("📋 已设置默认频率过滤列表，包含%d个频率", list_size);
+}
+
+// 清除频率过滤
+void SI4732_Scanner::clearFrequencyFilter()
+{
+    filter_count = 0;
+    debugPrint("🔓 清除频率过滤");
+}
+
+// 过滤电台列表
+uint16_t SI4732_Scanner::filterStations(StationInfo* input_stations, uint16_t input_count, 
+                                        StationInfo* output_stations, uint16_t max_output)
+{
+    if (!input_stations || !output_stations || input_count == 0 || max_output == 0) {
+        return 0;
+    }
+    
+    uint16_t output_count = 0;
+    uint16_t filtered_count = 0;
+    
+    debugPrint("🔍 开始频率过滤，输入%d个电台...", input_count);
+    
+    for (uint16_t i = 0; i < input_count && output_count < max_output; i++) {
+        bool should_filter = false;
+        
+        // 检查当前频率是否在过滤列表中
+        for (uint16_t j = 0; j < filter_count; j++) {
+            // 允许±10kHz的误差范围
+            if (abs((int)input_stations[i].frequency - (int)filter_frequencies[j]) <= 1) {
+                should_filter = true;
+                filtered_count++;
+                debugPrint("🚫 过滤频率: %.2f MHz (匹配过滤列表中的 %.2f MHz)",
+                          input_stations[i].frequency / 100.0,
+                          filter_frequencies[j] / 100.0);
+                break;
+            }
+        }
+        
+        // 如果不需要过滤，则添加到输出列表
+        if (!should_filter) {
+            output_stations[output_count] = input_stations[i];
+            output_count++;
+        }
+    }
+    
+    debugPrint("✅ 频率过滤完成：输入%d个，过滤%d个，输出%d个电台", 
+              input_count, filtered_count, output_count);
+    
+    return output_count;
 }

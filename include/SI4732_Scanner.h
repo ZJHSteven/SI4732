@@ -54,6 +54,12 @@ public:
     /* ───────────────────────── 状态与调试 ───────────────────────── */
     void printStatus();                            // 打印当前状态
     void printStationList(StationInfo* stations, uint16_t count); // 打印电台列表
+    void sortStationsByRSSI(StationInfo* stations, uint16_t count); // 按RSSI排序电台列表
+    void setFrequencyFilter(uint16_t* filter_list, uint16_t filter_count); // 设置频率过滤列表
+    void setDefaultFrequencyFilter();             // 设置默认过滤频率列表
+    void clearFrequencyFilter();                  // 清除频率过滤
+    uint16_t filterStations(StationInfo* input_stations, uint16_t input_count, 
+                           StationInfo* output_stations, uint16_t max_output); // 过滤电台
     bool isInitialized() { return initialized; }
     
     /* ───────────────────────── 静默模式 ───────────────────────── */
@@ -77,6 +83,11 @@ private:
     
     uint16_t band_start;           // 波段起始频率
     uint16_t band_end;             // 波段结束频率
+    
+    /* ───────────────────────── 频率过滤 ───────────────────────── */
+    static const uint16_t MAX_FILTER_FREQ = 50;   // 最大过滤频率数量
+    uint16_t filter_frequencies[MAX_FILTER_FREQ]; // 需要过滤的频率列表
+    uint16_t filter_count;                        // 过滤频率数量
     
     /* ───────────────────────── 私有辅助函数 ───────────────────────── */
     void debugPrint(const char* format, ...);     // 调试输出

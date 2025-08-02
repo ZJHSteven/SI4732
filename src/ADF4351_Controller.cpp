@@ -129,10 +129,12 @@ bool ADF4351_Controller::setLoFrequency(uint32_t lo_freq_hz)
   writeReg(reg[0]);
   delayMicroseconds(300);
 
-  Serial.printf("PLL参数: VCO=%.3f MHz, INT=%u, FRAC=%u, MOD=%u, RF_DIV=%u\n",
-                vco_freq / 1e6, INT, FRAC, MOD, 1u << rf_div_sel);
-  Serial.printf("设置: RF=%.3f MHz → LO=%.3f MHz\n", 
-                current_rf_freq / 1e6, lo_freq_hz / 1e6);
+  if (!silent_mode) {
+    Serial.printf("PLL参数: VCO=%.3f MHz, INT=%u, FRAC=%u, MOD=%u, RF_DIV=%u\n",
+                  vco_freq / 1e6, INT, FRAC, MOD, 1u << rf_div_sel);
+    Serial.printf("设置: RF=%.3f MHz → LO=%.3f MHz\n", 
+                  current_rf_freq / 1e6, lo_freq_hz / 1e6);
+  }
   return true;
 }
 
@@ -158,13 +160,22 @@ bool ADF4351_Controller::waitForLock(uint16_t timeout_ms)
   {
     if (isLocked())
     {
-      Serial.printf("✓ PLL锁定成功 (%d ms)\n", i + 1);
+      if (!silent_mode) {
+        Serial.printf("✓ PLL锁定成功 (%d ms)\n", i + 1);
+      }
       return true;
     }
     delay(1);
   }
-  Serial.printf("✗ PLL锁定超时 (%d ms)\n", timeout_ms);
+  if (!silent_mode) {
+    Serial.printf("✗ PLL锁定超时 (%d ms)\n", timeout_ms);
+  }
   return false;
+}
+
+void ADF4351_Controller::setSilentMode(bool silent)
+{
+  silent_mode = silent;
 }
 
 void ADF4351_Controller::printStatus()

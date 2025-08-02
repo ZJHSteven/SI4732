@@ -61,6 +61,13 @@ public:
   
   // 等待锁定，返回锁定状态
   bool waitForLock(uint16_t timeout_ms = 100);
+  
+  // 静默模式控制（减少串口输出）
+  void setSilentMode(bool silent);
+  bool getSilentMode() const { return silent_mode; }
+
+private:
+  bool silent_mode = false; // 静默模式标志
 };
 
 #endif // ADF4351_CONTROLLER_H

@@ -152,7 +152,7 @@ void loop()
   static uint32_t scan_end_freq = 108000000UL;   // 结束频率 108MHz
   static uint32_t scan_step = 100000UL;          // 步进 100kHz (可调整)
   static uint32_t current_scan_freq = 88000000UL; // 当前扫频频率
-  static unsigned long scan_interval = 15;       // 扫频间隔(ms) - 可调整
+  static unsigned long scan_interval = 1;       // 扫频间隔(ms) - 可调整
   static bool scan_direction = true;             // true=向上扫，false=向下扫
   static uint32_t scan_count = 0;               // 扫频计数器
   

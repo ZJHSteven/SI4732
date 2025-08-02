@@ -45,3 +45,26 @@ bool SI_getQuality(int16_t &rssi, int16_t &snr)
 
     return true;
 }
+
+extern SI4735 radio;
+extern bool si_ready;
+
+// 快速切 AM 模式：不重复 I2C/复位，只改制式与频点
+bool SI_set_mode_AM_IF107()
+{
+    if (!si_ready)
+        return false;
+    radio.setAM();                 // 或 radio.setAM(150, 30000);
+    radio.setFrequency(SI_IF_kHz); // 10700 kHz
+    return true;
+}
+
+// 快速切 FM 模式并调到 rf_hz（单位 Hz）
+bool SI_set_mode_FM(uint32_t rf_hz)
+{
+    if (!si_ready)
+        return false;
+    radio.setFM();                    // 或 radio.setFM(6400, 10800);  // 6.4~108MHz
+    radio.setFrequency(rf_hz / 10000); // 库是 kHz
+    return true;
+}

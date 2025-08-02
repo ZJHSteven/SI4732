@@ -17,3 +17,5 @@ constexpr uint32_t SI_IF_kHz = 10700UL;
 // ── 对外仅暴露这些简单函数 ─────────────────────────────
 bool SI_init_AM_IF107();                         // 上电初始化 + 进入 AM 模式 + 设定 10.7MHz
 bool SI_getQuality(int16_t &rssi, int16_t &snr); // 读取当前 RSSI/SNR（轮询）
+bool SI_set_mode_AM_IF107();                     // 快速切到 AM@10.7MHz（不重做寻址）
+bool SI_set_mode_FM(uint32_t rf_hz);             // 快速切到 FM 并直接调台（单位 Hz）
